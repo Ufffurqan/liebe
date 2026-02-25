@@ -5,6 +5,7 @@ import requests
 import time
 import re
 from ddgs import DDGS
+from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
 from liebe.youtube_manager import youtube_manager
 
@@ -84,8 +85,8 @@ class LiebeOrchestrator:
             r"weather\s+in\s+", r"weather\s+of\s+", r"weather\s+at\s+",
             r"whats\s+the\s+weather\s+in\s+", r"whats\s+the\s+weather\s+",
             r"what's\s+the\s+weather\s+", r"what\s+is\s+the\s+weather\s+",
-            r"how is the weather in ", r"today's weather", r"weather", 
-            r"temperature\s+in\s+", r"forecast\s+in\s+", r"whats\s+", r"today's", r"in\s+", r"of\s+"
+            r"how is the weather in ", r"today's weather", r"todays weather", r"weather", 
+            r"temperature\s+in\s+", r"forecast\s+in\s+", r"whats\s+", r"today's", r"todays", r"in\s+", r"of\s+"
         ]
         
         for pattern in remove_patterns:
@@ -146,7 +147,8 @@ class LiebeOrchestrator:
         words = msg.split()
         
         # Determine if it's a basic conversation without any need for tools
-        is_basic = msg in greetings or (len(words) <= 2 and not any(k in msg for k in ["weather", "time", "alarm", "news"]))
+        conversational_starters = ["how are you", "what's up", "good morning", "good evening", "good night", "thanks", "thank you"]
+        is_basic = msg in greetings or any(s in msg for s in conversational_starters) or (len(words) <= 3 and not any(k in msg for k in ["weather", "time", "alarm", "news", "note", "search", "find", "tutorial"]))
         
         search_keywords = [
             "search", "find", "latest", "price", "stock", "what is the status", 
@@ -164,6 +166,7 @@ class LiebeOrchestrator:
             "is_video": any(k in msg for k in video_keywords),
             "is_alarm": any(k in msg for k in ["alarm", "wake me up", "timer"]),
             "is_note": any(k in msg for k in ["remind", "save", "note", "task", "remember", "write", "assignment", "deadline", "todo", "project", "meeting", "appointment", "submit"]),
+            "is_basic": is_basic,
             "selected_service": "gemini" # Default
         }
 
@@ -270,39 +273,52 @@ class LiebeOrchestrator:
                 messages.append({"role": "user" if h["role"] == "user" else "assistant", "content": h["content"]})
         messages.append({"role": "user", "content": user_message})
 
-        # Ensemble Perspectives
+        # Ensemble Perspectives (Only for non-basic queries)
         other_perspectives = []
         
-        # 1. Get Groq Reasoning (if available)
-        if self.groq_client:
-            yield json.dumps({"status": "progress", "message": "🧠 thinking..."})
-            try:
-                groq_resp = self._call_groq(self.model_groq_id, system_prompt, messages)
-                other_perspectives.append(f"GROQ ANALYSIS: {groq_resp}")
-            except: pass
+        if not intent.get("is_basic", False):
+            # Parallel execution with a dictionary mapping futures to labels
+            future_to_label = {}
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                # 1. Get Groq Reasoning (if available)
+                if self.groq_client:
+                    yield json.dumps({"status": "progress", "message": "🧠 thinking..."})
+                    f_groq = executor.submit(self._call_groq, self.model_groq_id, system_prompt, messages, max_tokens=150)
+                    future_to_label[f_groq] = "GROQ ANALYSIS"
 
-        # 2. Get Ollama Local Perspective (if available)
-        if self.ollama_client:
-            yield json.dumps({"status": "progress", "message": "🏠 liebe thinking privately..."})
-            try:
-                ollama_resp = self._call_ollama(system_prompt, messages)
-                other_perspectives.append(f"OLLAMA PERSPECTIVE: {ollama_resp}")
-            except: pass
+                # 2. Get Ollama Local Perspective (if available) - Be extra brief to save time
+                if self.ollama_client:
+                    yield json.dumps({"status": "progress", "message": "🏠 liebe thinking privately..."})
+                    f_ollama = executor.submit(self._call_ollama, system_prompt + " (CRITICAL: Be extremely brief, max 2 sentences.)", messages)
+                    future_to_label[f_ollama] = "OLLAMA PERSPECTIVE"
 
-        # 3. Final Synthesis with Gemini (The Master "Liebe")
+                # Collect results as they finish (or wait for all)
+                from concurrent.futures import as_completed
+                for future in as_completed(future_to_label):
+                    label = future_to_label[future]
+                    try:
+                        resp = future.result(timeout=12) # Slightly longer timeout
+                        other_perspectives.append(f"{label}: {resp}")
+                    except Exception as e:
+                        print(f"Parallel model error ({label}): {e}")
+
+        # Final Synthesis with Gemini (The Master "Liebe")
         yield json.dumps({"status": "progress", "message": "🧠 thinking..."})
         
         try:
             full_reply = ""
             if self.gemini_client:
-                # Enrich the prompt with other models' perspectives
-                ensemble_prompt = system_prompt + "\n\n### MULTI-MODEL ENSEMBLE MODE\n"
-                ensemble_prompt += "You are now acting as the lead 'Liebe' synthesizer. You have been provided with perspectives from other AI models (Groq and Ollama) and tool data (Weather/YouTube).\n"
-                ensemble_prompt += "Your goal is to generate the BEST 100% final answer by:\n"
-                ensemble_prompt += "1. Analyzing and merging the AI perspectives (80% weight).\n"
-                ensemble_prompt += "2. Incorporating tool data (10% weight).\n"
-                ensemble_prompt += "3. Using your own core 'Liebe' logic to polish the final message (10% weight).\n\n"
-                ensemble_prompt += "PERSPECTIVES GATHERED:\n" + "\n".join(other_perspectives)
+                # Enrich the prompt only if we have perspectives
+                if other_perspectives:
+                    ensemble_prompt = system_prompt + "\n\n### MULTI-MODEL ENSEMBLE MODE\n"
+                    ensemble_prompt += "You are now acting as the lead 'Liebe' synthesizer. You have been provided with perspectives from other AI models (Groq and Ollama) and tool data (Weather/YouTube).\n"
+                    ensemble_prompt += "Your goal is to generate the BEST 100% final answer by:\n"
+                    ensemble_prompt += "1. Analyzing and merging the AI perspectives (80% weight).\n"
+                    ensemble_prompt += "2. Incorporating tool data (10% weight).\n"
+                    ensemble_prompt += "3. Using your own core 'Liebe' logic to polish the final message (10% weight).\n\n"
+                    ensemble_prompt += "PERSPECTIVES GATHERED:\n" + "\n".join(other_perspectives)
+                else:
+                    ensemble_prompt = system_prompt # Fast route
                 
                 prompt_parts = [f"SYSTEM: {ensemble_prompt}"]
                 for m in messages:
@@ -329,9 +345,12 @@ class LiebeOrchestrator:
         response = self.gemini_client.generate_content(full_prompt)
         return response.text
 
-    def _call_groq(self, model, system_prompt, messages):
+    def _call_groq(self, model, system_prompt, messages, max_tokens=None):
         groq_messages = [{"role": "system", "content": system_prompt}] + messages
-        completion = self.groq_client.chat.completions.create(model=model, messages=groq_messages)
+        params = {"model": model, "messages": groq_messages}
+        if max_tokens:
+            params["max_tokens"] = max_tokens
+        completion = self.groq_client.chat.completions.create(**params)
         return completion.choices[0].message.content
 
     def _call_ollama(self, system_prompt, messages):
