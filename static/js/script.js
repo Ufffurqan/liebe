@@ -338,6 +338,10 @@ document.addEventListener('DOMContentLoaded', () => {
         textarea.style.height = 'auto';
         sendBtn.classList.remove('active');
         currentChatHistory = []; // Reset history for new chat
+
+        // Clear history in DB
+        fetch('/api/chat/history', { method: 'DELETE' })
+            .catch(e => console.error("History clear error:", e));
     }
     newChatBtn.addEventListener('click', startNewChat);
 
@@ -911,4 +915,29 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
+    // Load History
+    async function loadChatHistory() {
+        try {
+            const response = await fetch('/api/chat/history');
+            const data = await response.json();
+            if (data && data.length > 0) {
+                const logoArea = document.querySelector('.logo-area');
+                const mainContent = document.querySelector('.main-content');
+                const chatContainer = document.getElementById('chatContainer');
+
+                if (logoArea) logoArea.style.display = 'none';
+                if (mainContent) mainContent.classList.add('chat-active');
+                if (chatContainer) {
+                    chatContainer.classList.add('active');
+                    data.forEach(msg => {
+                        addMessage(msg.content, msg.role === 'assistant' ? 'ai' : 'user');
+                        currentChatHistory.push({ role: msg.role, content: msg.content });
+                    });
+                    chatContainer.scrollTop = chatContainer.scrollHeight;
+                }
+            }
+        } catch (e) { console.error("History load error:", e); }
+    }
+
+    loadChatHistory();
 });

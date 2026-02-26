@@ -38,23 +38,36 @@ class LiebeOrchestrator:
         self.model_r1_id = "deepseek-r1-distill-llama-70b" 
         
         # Initialize Gemini
-        if self.gemini_key and not self.gemini_key.startswith("your_"):
-            genai.configure(api_key=self.gemini_key)
-            self.gemini_client = genai.GenerativeModel(self.model_gemini_id)
-        else:
+        try:
+            if self.gemini_key and not self.gemini_key.startswith("your_"):
+                genai.configure(api_key=self.gemini_key)
+                self.gemini_client = genai.GenerativeModel(self.model_gemini_id)
+                print(f"DEBUG: Gemini Initialized with model: {self.model_gemini_id}")
+            else:
+                self.gemini_client = None
+                print("DEBUG: Gemini Key missing or placeholder.")
+        except Exception as e:
             self.gemini_client = None
+            print(f"DEBUG: Gemini Init Failed: {e}")
 
         # Initialize Groq
-        if self.groq_key and not self.groq_key.startswith("your_"):
-            self.groq_client = Groq(api_key=self.groq_key)
-        else:
+        try:
+            if self.groq_key and not self.groq_key.startswith("your_"):
+                self.groq_client = Groq(api_key=self.groq_key)
+                print(f"DEBUG: Groq Initialized.")
+            else:
+                self.groq_client = None
+                print("DEBUG: Groq Key missing.")
+        except Exception as e:
             self.groq_client = None
+            print(f"DEBUG: Groq Init Failed: {e}")
 
         # Initialize Ollama
         try:
             self.ollama_client = ollama.Client(host=self.ollama_host)
-        except Exception:
+        except Exception as e:
             self.ollama_client = None
+            print(f"DEBUG: Ollama client could not be created: {e}")
 
     def is_api_valid(self):
         """Checks if at least one AI service is configured."""
@@ -143,12 +156,13 @@ class LiebeOrchestrator:
         msg = user_message.lower().strip()
         
         # 1. Fast Path: Basic Greetings & Short Messages
-        greetings = ["hi", "hello", "hey", "hola", "yo", "how are you", "who are you", "what is your name"]
+        greetings = ["hi", "hello", "hey", "hola", "yo", "hi liebe", "hello liebe", "hey liebe", "yo liebe"]
         words = msg.split()
         
         # Determine if it's a basic conversation without any need for tools
-        conversational_starters = ["how are you", "what's up", "good morning", "good evening", "good night", "thanks", "thank you"]
-        is_basic = msg in greetings or any(s in msg for s in conversational_starters) or (len(words) <= 3 and not any(k in msg for k in ["weather", "time", "alarm", "news", "note", "search", "find", "tutorial"]))
+        conversational_starters = ["how are you", "what's up", "good morning", "good evening", "good night", "thanks", "thank you", "nice to meet you"]
+        is_basic = any(g == msg for g in greetings) or any(s in msg for s in conversational_starters) or (len(words) <= 3 and not any(k in msg for k in ["weather", "time", "alarm", "news", "note", "search", "find", "tutorial", "video", "save", "remind"]))
+        is_greeting = is_basic and (msg in greetings or any(g in msg for g in ["hi ", "hello ", "hey ", "yo "]))
         
         search_keywords = [
             "search", "find", "latest", "price", "stock", "what is the status", 
@@ -167,6 +181,7 @@ class LiebeOrchestrator:
             "is_alarm": any(k in msg for k in ["alarm", "wake me up", "timer"]),
             "is_note": any(k in msg for k in ["remind", "save", "note", "task", "remember", "write", "assignment", "deadline", "todo", "project", "meeting", "appointment", "submit"]),
             "is_basic": is_basic,
+            "is_greeting": is_greeting,
             "selected_service": "gemini" # Default
         }
 
@@ -236,8 +251,26 @@ class LiebeOrchestrator:
         yield json.dumps({"status": "progress", "message": "🧿 Analyzing intent..."})
         
         intent = self.analyze_intent(user_message)
+        print(f"DEBUG: intent={intent}")
         if force_search: intent["needs_search"] = True
         if force_deep_thinking: intent["selected_service"] = "groq_r1"
+
+        # --- SUPER FAST TRACK (Instant response for greetings/basics) ---
+        if intent.get("is_greeting") and not intent["needs_search"]:
+            yield json.dumps({"status": "progress", "message": "🧠 thinking..."})
+            try:
+                # Use a leaner system prompt for speed
+                sys_msg = "You are Liebe, a personal AI assistant. Be brief, friendly, and helpful."
+                response = self.gemini_client.generate_content(f"SYSTEM: {sys_msg}\nUSER: {user_message}", stream=True)
+                full_reply = ""
+                for chunk in response:
+                    if chunk.text:
+                        full_reply += chunk.text
+                        yield json.dumps({"status": "chunk", "text": chunk.text, "service": "gemini"})
+                yield json.dumps({"status": "done", "full_text": full_reply, "service": "gemini"})
+                return # Terminate stream here
+            except Exception as e:
+                print(f"DEBUG: Fast track failed, falling back: {e}")
 
         search_contexts = []
         if intent["is_weather"]:
@@ -289,7 +322,7 @@ class LiebeOrchestrator:
                 # 2. Get Ollama Local Perspective (if available) - Be extra brief to save time
                 if self.ollama_client:
                     yield json.dumps({"status": "progress", "message": "🏠 liebe thinking privately..."})
-                    f_ollama = executor.submit(self._call_ollama, system_prompt + " (CRITICAL: Be extremely brief, max 2 sentences.)", messages)
+                    f_ollama = executor.submit(self._call_ollama, system_prompt + " (CRITICAL: Be extremely brief, max 2 sentences.)", messages, max_tokens=100)
                     future_to_label[f_ollama] = "OLLAMA PERSPECTIVE"
 
                 # Collect results as they finish (or wait for all)
@@ -302,38 +335,63 @@ class LiebeOrchestrator:
                     except Exception as e:
                         print(f"Parallel model error ({label}): {e}")
 
-        # Final Synthesis with Gemini (The Master "Liebe")
+        # Final Synthesis (The Master "Liebe")
         yield json.dumps({"status": "progress", "message": "🧠 thinking..."})
         
         try:
             full_reply = ""
-            if self.gemini_client:
-                # Enrich the prompt only if we have perspectives
-                if other_perspectives:
-                    ensemble_prompt = system_prompt + "\n\n### MULTI-MODEL ENSEMBLE MODE\n"
-                    ensemble_prompt += "You are now acting as the lead 'Liebe' synthesizer. You have been provided with perspectives from other AI models (Groq and Ollama) and tool data (Weather/YouTube).\n"
-                    ensemble_prompt += "Your goal is to generate the BEST 100% final answer by:\n"
-                    ensemble_prompt += "1. Analyzing and merging the AI perspectives (80% weight).\n"
-                    ensemble_prompt += "2. Incorporating tool data (10% weight).\n"
-                    ensemble_prompt += "3. Using your own core 'Liebe' logic to polish the final message (10% weight).\n\n"
-                    ensemble_prompt += "PERSPECTIVES GATHERED:\n" + "\n".join(other_perspectives)
-                else:
-                    ensemble_prompt = system_prompt # Fast route
-                
-                prompt_parts = [f"SYSTEM: {ensemble_prompt}"]
-                for m in messages:
-                    prompt_parts.append(f"{m['role'].upper()}: {m['content']}")
-                
-                response = self.gemini_client.generate_content("\n".join(prompt_parts), stream=True)
-                for chunk in response:
-                    if chunk.text:
-                        full_reply += chunk.text
-                        yield json.dumps({"status": "chunk", "text": chunk.text, "service": "gemini"})
-            else:
-                yield json.dumps({"status": "error", "message": "Master AI (Gemini) not available."})
-
-            yield json.dumps({"status": "done", "full_text": full_reply, "service": "gemini"})
             
+            # Decision Matrix for Synthesis
+            if other_perspectives:
+                ensemble_prompt = system_prompt + "\n\n### MULTI-MODEL ENSEMBLE MODE\n"
+                ensemble_prompt += "You are now acting as the lead 'Liebe' synthesizer. You have been provided with perspectives from other AI models (Groq and Ollama) and tool data (Weather/YouTube).\n"
+                ensemble_prompt += "Your goal is to generate the BEST 100% final answer by:\n"
+                ensemble_prompt += "1. Analyzing and merging the AI perspectives (80% weight).\n"
+                ensemble_prompt += "2. Incorporating tool data (10% weight).\n"
+                ensemble_prompt += "3. Using your own core 'Liebe' logic to polish the final message (10% weight).\n\n"
+                ensemble_prompt += "PERSPECTIVES GATHERED:\n" + "\n".join(other_perspectives)
+            else:
+                ensemble_prompt = system_prompt # Fast route
+
+            # Try Gemini First
+            if self.gemini_client:
+                try:
+                    prompt_parts = [f"SYSTEM: {ensemble_prompt}"]
+                    for m in messages:
+                        prompt_parts.append(f"{m['role'].upper()}: {m['content']}")
+                    
+                    response = self.gemini_client.generate_content("\n".join(prompt_parts), stream=True)
+                    for chunk in response:
+                        if chunk.text:
+                            full_reply += chunk.text
+                            yield json.dumps({"status": "chunk", "text": chunk.text, "service": "gemini"})
+                    yield json.dumps({"status": "done", "full_text": full_reply, "service": "gemini"})
+                    return
+                except Exception as e:
+                    print(f"DEBUG: Gemini Synthesis Failed: {e}. Falling back to Groq.")
+
+            # Fallback to Groq if Gemini fails or is missing
+            if self.groq_client:
+                try:
+                    groq_messages = [{"role": "system", "content": ensemble_prompt}] + messages
+                    response = self.groq_client.chat.completions.create(
+                        model=self.model_groq_id,
+                        messages=groq_messages,
+                        stream=True
+                    )
+                    for chunk in response:
+                        if chunk.choices[0].delta.content:
+                            content = chunk.choices[0].delta.content
+                            full_reply += content
+                            yield json.dumps({"status": "chunk", "text": content, "service": "groq"})
+                    yield json.dumps({"status": "done", "full_text": full_reply, "service": "groq"})
+                    return
+                except Exception as e:
+                    print(f"DEBUG: Groq Synthesis Failed: {e}")
+
+            # If all fail
+            yield json.dumps({"status": "error", "message": "All AI synthesizers failed. Please check your internet or API keys."})
+
         except Exception as e:
             yield json.dumps({"status": "error", "message": f"Generation Error: {str(e)}"})
 
@@ -353,9 +411,12 @@ class LiebeOrchestrator:
         completion = self.groq_client.chat.completions.create(**params)
         return completion.choices[0].message.content
 
-    def _call_ollama(self, system_prompt, messages):
+    def _call_ollama(self, system_prompt, messages, max_tokens=None):
         ollama_messages = [{"role": "system", "content": system_prompt}] + messages
-        response = self.ollama_client.chat(model=self.model_ollama_id, messages=ollama_messages)
+        options = {}
+        if max_tokens:
+            options["num_predict"] = max_tokens
+        response = self.ollama_client.chat(model=self.model_ollama_id, messages=ollama_messages, options=options)
         return response['message']['content']
 
 orchestrator = LiebeOrchestrator()

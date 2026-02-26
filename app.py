@@ -7,7 +7,7 @@ from flask import Flask, render_template, request, jsonify, send_file, Response
 from flask_cors import CORS
 from dotenv import load_dotenv
 from liebe.orchestrator import orchestrator
-from models import db, DailyNote, Alarm
+from models import db, DailyNote, Alarm, ChatMessage
 import edge_tts
 
 # Load environment variables
@@ -39,17 +39,41 @@ def chat():
     search_enabled = data.get('search_enabled', False)
     deep_thinking_enabled = data.get('deep_thinking_enabled', False)
     chat_history = data.get('history', [])
+    user_msg = ChatMessage(role='user', content=user_message)
+    db.session.add(user_msg)
+    db.session.commit()
 
     def generate():
-        for update in orchestrator.chat_stream(
+        full_reply = ""
+        for update_str in orchestrator.chat_stream(
             user_message, 
             history=chat_history,
             force_search=search_enabled, 
             force_deep_thinking=deep_thinking_enabled
         ):
-            yield f"data: {update}\n\n"
+            update = json.loads(update_str)
+            if update.get('status') == 'done':
+                full_reply = update.get('full_text', '')
+            yield f"data: {update_str}\n\n"
+        
+        # Save AI Response
+        if full_reply:
+            ai_msg = ChatMessage(role='assistant', content=full_reply)
+            db.session.add(ai_msg)
+            db.session.commit()
 
     return Response(generate(), mimetype='text/event-stream')
+
+@app.route('/api/chat/history', methods=['GET'])
+def get_chat_history():
+    messages = ChatMessage.query.order_by(ChatMessage.timestamp.asc()).all()
+    return jsonify([m.to_dict() for m in messages])
+
+@app.route('/api/chat/history', methods=['DELETE'])
+def clear_chat_history():
+    ChatMessage.query.delete()
+    db.session.commit()
+    return jsonify({"status": "success"})
 
 @app.route('/api/weather', methods=['GET'])
 def get_top_weather():
