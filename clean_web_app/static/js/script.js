@@ -35,7 +35,6 @@ document.addEventListener('DOMContentLoaded', () => {
     let selectedDate = new Date();
     selectedDate.setHours(0, 0, 0, 0);
     let currentChatHistory = [];
-    let currentSessionId = localStorage.getItem('liebe_session_id') || 'default';
 
     // --- API SYNC ---
     async function syncData() {
@@ -230,7 +229,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     ${note.type === 'briefing' ? '<div style="color: var(--accent-color); font-weight: 600; margin-bottom: 6px; display: flex; align-items: center; gap: 5px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v1M12 21v1M4.22 4.22l.7.7M18.36 18.36l.7.7M1 12h1M22 12h1M4.22 19.78l.7-.7M18.36 5.64l.7-.7"/></svg> Morning Briefing Report</div>' : ''}
                     <div style="${note.type === 'briefing' ? 'font-size: 13px; line-height: 1.5; white-space: pre-wrap;' : ''}">${note.content}</div>
                 </div>
-                <div class="date-note-time">${note.time || (note.timestamp ? new Date(note.timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '')}</div>
+                <div class="date-note-time">${note.time}</div>
             `;
 
             // Add delete event listener
@@ -338,178 +337,20 @@ document.addEventListener('DOMContentLoaded', () => {
         mainContent.classList.remove('chat-active');
         textarea.style.height = 'auto';
         sendBtn.classList.remove('active');
+        currentChatHistory = []; // Reset history for new chat
 
-        // Start a completely new session with unique ID
-        currentSessionId = 'session_' + Date.now();
-        localStorage.setItem('liebe_session_id', currentSessionId);
-        currentChatHistory = [];
-
-        renderSessions();
+        // Clear history in DB
+        fetch('/api/chat/history', { method: 'DELETE' })
+            .catch(e => console.error("History clear error:", e));
     }
     newChatBtn.addEventListener('click', startNewChat);
-
-    async function renderSessions() {
-        const historyList = document.querySelector('.chat-history');
-        const header = historyList.querySelector('.history-header');
-
-        try {
-            const res = await fetch('/api/chat/sessions');
-            const sessions = await res.json();
-
-            // Clear old items (keep header)
-            while (historyList.lastChild && historyList.lastChild !== header) {
-                historyList.removeChild(historyList.lastChild);
-            }
-
-            if (sessions.length === 0) {
-                const item = document.createElement('div');
-                item.className = 'history-item active';
-                item.innerHTML = '<span style="opacity:0.6; margin-right:8px;">💬</span> New Chat';
-                historyList.appendChild(item);
-                return;
-            }
-
-            const groups = { 'Today': [], 'Yesterday': [], 'Other': {} };
-            const now = new Date();
-            const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-            const yesterday = today - (86400000);
-
-            sessions.forEach(s => {
-                // Robust timestamp parsing
-                let ts = s.timestamp;
-                if (typeof ts === 'string') ts = ts.replace(' ', 'T');
-                const sDate = new Date(ts);
-
-                if (isNaN(sDate.getTime())) {
-                    if (!groups['Other']['Unknown Date']) groups['Other']['Unknown Date'] = [];
-                    groups['Other']['Unknown Date'].push(s);
-                    return;
-                }
-
-                const sTime = new Date(sDate.getFullYear(), sDate.getMonth(), sDate.getDate()).getTime();
-
-                if (sTime === today) groups['Today'].push(s);
-                else if (sTime === yesterday) groups['Yesterday'].push(s);
-                else {
-                    const dStr = sDate.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
-                    if (!groups['Other'][dStr]) groups['Other'][dStr] = [];
-                    groups['Other'][dStr].push(s);
-                }
-            });
-
-            const addGrp = (title, list) => {
-                if (!list || !list.length) return;
-
-                const h = document.createElement('div');
-                h.style.padding = '18px 12px 8px';
-                h.style.fontSize = '11px';
-                h.style.color = 'var(--text-secondary)';
-                h.style.textTransform = 'uppercase';
-                h.style.fontWeight = '700';
-                h.style.letterSpacing = '0.05em';
-                h.style.opacity = '0.8';
-                h.innerText = title;
-                historyList.appendChild(h);
-
-                list.forEach(s => {
-                    const item = document.createElement('div');
-                    item.className = `history-item ${s.session_id === currentSessionId ? 'active' : ''}`;
-
-                    let titleChat = s.content || "Empty Chat";
-                    if (titleChat.length > 25) titleChat = titleChat.substring(0, 25) + '...';
-
-                    item.innerHTML = `<span style="opacity:0.6; margin-right:8px;">💬</span> ${titleChat}`;
-                    item.onclick = () => switchSession(s.session_id);
-                    historyList.appendChild(item);
-                });
-            };
-
-            addGrp('Today', groups['Today']);
-            addGrp('Yesterday', groups['Yesterday']);
-
-            // Sort dates descending
-            const sortedDates = Object.keys(groups['Other']).sort((a, b) => new Date(b) - new Date(a));
-            sortedDates.forEach(d => addGrp(d, groups['Other'][d]));
-
-        } catch (e) {
-            console.error("Session render failed", e);
-        }
-    }
-
-    async function switchSession(id) {
-        currentSessionId = id;
-        localStorage.setItem('liebe_session_id', id);
-        currentChatHistory = [];
-        document.getElementById('chatContainer').innerHTML = '';
-        await loadChatHistory(id);
-        renderSessions();
-    }
-
-    // --- FILE UPLOAD HANDLING ---
-    const attachBtn = document.getElementById('attachBtn');
-    const fileInput = document.getElementById('fileInput');
-    let selectedFile = null;
-
-    attachBtn.addEventListener('click', () => {
-        fileInput.click();
-    });
-
-    fileInput.addEventListener('change', () => {
-        if (fileInput.files.length > 0) {
-            selectedFile = fileInput.files[0];
-            attachBtn.classList.add('has-file');
-            attachBtn.title = `File: ${selectedFile.name}`;
-            // Optional: change icon or add badge
-            if (!textarea.value.trim()) {
-                sendBtn.classList.add('active'); // Activate send if file selected
-            }
-        } else {
-            selectedFile = null;
-            attachBtn.classList.remove('has-file');
-            attachBtn.title = `Attach`;
-        }
-    });
-
-    async function uploadFile() {
-        if (!selectedFile) return null;
-
-        const formData = new FormData();
-        formData.append('file', selectedFile);
-
-        try {
-            const res = await fetch('/api/upload', {
-                method: 'POST',
-                body: formData
-            });
-            return await res.json();
-        } catch (e) {
-            console.error("Upload failed", e);
-            return null;
-        }
-    }
 
     // Send Interaction
     async function sendMessage() {
         if (!sendBtn.classList.contains('active')) return;
 
         const message = textarea.value.trim();
-        if (!message && !selectedFile) return;
-
-        let fileData = null;
-        if (selectedFile) {
-            sendBtn.innerHTML = '<div class="loader">...</div>';
-            fileData = await uploadFile();
-            if (!fileData) {
-                alert("File upload failed.");
-                sendBtn.innerHTML = `
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <line x1="12" y1="19" x2="12" y2="5"></line>
-                        <polyline points="5 12 12 5 19 12"></polyline>
-                    </svg>
-                `;
-                return;
-            }
-        }
+        if (!message) return;
 
         // Check toggle states
         let useSearch = false;
@@ -528,17 +369,11 @@ document.addEventListener('DOMContentLoaded', () => {
         chatContainer.classList.add('active');
 
         // Add User Message
-        addMessage(message, 'user', 'none', fileData);
+        addMessage(message, 'user');
         textarea.value = '';
         textarea.style.height = 'auto';
         sendBtn.classList.remove('active');
         sendBtn.innerHTML = '<div class="loader">...</div>';
-
-        // Clear file state
-        selectedFile = null;
-        fileInput.value = '';
-        attachBtn.classList.remove('has-file');
-        attachBtn.title = 'Attach';
 
         // 1. Create Progress Bubble (Thinking/Searching)
         const progressBubble = document.createElement('div');
@@ -558,11 +393,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 body: JSON.stringify({
                     message: message,
                     history: currentChatHistory,
-                    session_id: currentSessionId,
                     search_enabled: useSearch,
-                    deep_thinking_enabled: useDeepThinking,
-                    file_path: fileData ? fileData.file_path : null,
-                    file_type: fileData ? fileData.file_type : null
+                    deep_thinking_enabled: useDeepThinking
                 })
             });
 
@@ -606,9 +438,6 @@ document.addEventListener('DOMContentLoaded', () => {
                             currentChatHistory.push({ role: 'user', content: message });
                             currentChatHistory.push({ role: 'assistant', content: aiFullText });
                             if (currentChatHistory.length > 20) currentChatHistory = currentChatHistory.slice(-20);
-
-                            // Refresh sessions list to update titles
-                            renderSessions();
 
                         } else if (data.status === 'error') {
                             progressBubble.innerHTML = `<span style="color: #ff6b6b;">❌ ${data.message}</span>`;
@@ -674,17 +503,8 @@ document.addEventListener('DOMContentLoaded', () => {
             });
             const data = await response.json();
             currentBriefingScript = data.script;
-
-            // Mark as prepared locally and on server
             alarm.prepared = true;
-            await fetch(`/api/alarms/${alarm.id}`, {
-                method: 'PATCH',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ prepared: true })
-            });
-
-            const statusEl = document.getElementById('briefingPrepStatus');
-            if (statusEl) statusEl.style.display = 'block';
+            document.getElementById('briefingPrepStatus').style.display = 'block';
         } catch (e) {
             console.error("Briefing preparation failed", e);
         }
@@ -724,15 +544,11 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (e) { console.error("Sound play blocked", e); }
     }
 
-    const triggeredIds = new Set();
-
     function checkAlarms() {
         const now = new Date();
         const currentTime = now.getHours().toString().padStart(2, '0') + ':' + now.getMinutes().toString().padStart(2, '0');
 
         alarms.forEach((alarm) => {
-            if (triggeredIds.has(alarm.id)) return;
-
             let triggered = false;
 
             // Trigger 5 mins early for preparation
@@ -756,9 +572,8 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             if (triggered) {
-                triggeredIds.add(alarm.id);
                 window.removeAlarm(alarm.id);
-                triggerAlarm(alarm);
+                showAlarmModal();
             }
         });
     }
@@ -810,41 +625,41 @@ document.addEventListener('DOMContentLoaded', () => {
         speak(currentBriefingScript);
     }
 
-    async function autoSaveBriefing(script) {
+    function autoSaveBriefing(script) {
         const dateStr = new Date().toDateString();
         const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-        // Format the script for the note to make it readable
+        if (!notes[dateStr]) {
+            notes[dateStr] = [];
+        }
+
+        // Check for existing briefing today
+        const existingIdx = notes[dateStr].findIndex(n => n.type === 'briefing');
+
+        // Format the script for the note to make it readable (Summarize sections)
         let formattedNote = script;
+        // Basic readability improvements for the stored text
         formattedNote = formattedNote.replace(/First, /g, "\n• ")
             .replace(/Second, /g, "\n• ")
             .replace(/Third, /g, "\n• ")
             .replace(/\. /g, ".\n");
 
-        try {
-            await fetch('/api/notes', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    date_str: dateStr,
-                    content: formattedNote.trim(),
-                    type: 'briefing',
-                    timestamp: Date.now() / 1000
-                })
-            });
-            syncData(); // Refresh UI from server
-        } catch (e) {
-            console.error("Auto-save briefing failed", e);
-            // Fallback to local storage if API fails
-            if (!notes[dateStr]) notes[dateStr] = [];
-            notes[dateStr].push({
-                content: formattedNote.trim(),
-                time: timeStr,
-                type: 'briefing'
-            });
-            renderWeeklyCalendar();
-            renderDateNotes();
+        const briefingData = {
+            content: formattedNote.trim(),
+            time: timeStr,
+            timestamp: Date.now(),
+            type: 'briefing'
+        };
+
+        if (existingIdx > -1) {
+            notes[dateStr][existingIdx] = briefingData;
+        } else {
+            notes[dateStr].push(briefingData);
         }
+
+        localStorage.setItem('liebe-weekly-notes', JSON.stringify(notes));
+        renderWeeklyCalendar();
+        renderDateNotes();
     }
 
     function speak(text) {
@@ -933,89 +748,25 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     function formatMessageText(text) {
-        // 1. Extract and format code blocks first
-        const codeBlocks = [];
-        let formattedText = text.replace(/```(\w+)?\n([\s\S]*?)```/g, (match, lang, code) => {
-            const index = codeBlocks.length;
-            const language = lang || 'code';
-            codeBlocks.push({ language, code: code.trim() });
-            return `__CODE_BLOCK_${index}__`;
-        });
-
-        // 2. Format common markdown in remaining text
-        formattedText = formattedText.replace(/\n/g, '<br>');
+        let formattedText = text.replace(/\n/g, '<br>');
         formattedText = formattedText.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+
         const urlRegex = /(https?:\/\/[^\s<]+)/g;
-        formattedText = formattedText.replace(urlRegex, (url) => {
+        return formattedText.replace(urlRegex, (url) => {
             return `<a href="${url}" target="_blank" style="color: var(--accent-color); text-decoration: underline;">${url}</a>`;
         });
-
-        // 3. Re-insert formatted code blocks
-        codeBlocks.forEach((block, i) => {
-            const html = `
-                <div class="code-block-container">
-                    <div class="code-header">
-                        <div class="code-lang">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>
-                            ${block.language}
-                        </div>
-                        <button class="code-copy-btn" onclick="copyToClipboard(this, \`${btoa(block.code)}\`)">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                            Copy
-                        </button>
-                    </div>
-                    <div class="code-content">${block.code.replace(/</g, "&lt;").replace(/>/g, "&gt;")}</div>
-                </div>
-            `;
-            formattedText = formattedText.replace(`__CODE_BLOCK_${i}__`, html);
-        });
-
-        return formattedText;
     }
 
-    // Global Copy Helper
-    window.copyToClipboard = (btn, base64Code) => {
-        try {
-            const code = atob(base64Code);
-            navigator.clipboard.writeText(code).then(() => {
-                const originalHtml = btn.innerHTML;
-                btn.innerHTML = '<span>✅ Copied!</span>';
-                setTimeout(() => { btn.innerHTML = originalHtml; }, 2000);
-            });
-        } catch (e) {
-            console.error("Copy failed", e);
-        }
-    };
-
-    function addMessage(text, sender, service = 'none', fileData = null) {
+    function addMessage(text, sender, service = 'none') {
         const chatContainer = document.getElementById('chatContainer');
         const bubble = document.createElement('div');
         bubble.className = `message-bubble ${sender}`;
 
-        if (fileData && fileData.file_path) {
-            const fileContent = document.createElement('div');
-            fileContent.className = 'message-file-attachment';
-            if (fileData.file_type && fileData.file_type.startsWith('image/')) {
-                fileContent.innerHTML = `<img src="${fileData.file_path}" alt="Attached Photo" style="max-width: 100%; border-radius: 12px; margin-bottom: 8px; cursor: pointer;" onclick="window.open('${fileData.file_path}', '_blank')">`;
-            } else {
-                const fileName = fileData.file_path.split('_').slice(1).join('_');
-                fileContent.innerHTML = `
-                    <a href="${fileData.file_path}" target="_blank" style="display: flex; align-items: center; gap: 10px; padding: 10px; background: rgba(255,255,255,0.05); border-radius: 8px; text-decoration: none; color: inherit;">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path><polyline points="13 2 13 9 20 9"></polyline></svg>
-                        <span style="font-size: 13px;">${fileName || 'Attached File'}</span>
-                    </a>
-                `;
-            }
-            bubble.appendChild(fileContent);
-        }
-
-        const textContent = document.createElement('div');
         if (sender === 'user') {
-            textContent.innerHTML = formatMessageText(text);
+            bubble.innerHTML = formatMessageText(text);
         } else {
-            renderFinalAiBubble(textContent, text, service);
+            renderFinalAiBubble(bubble, text, service);
         }
-        bubble.appendChild(textContent);
 
         chatContainer.appendChild(bubble);
         chatContainer.scrollTop = chatContainer.scrollHeight;
@@ -1055,13 +806,9 @@ document.addEventListener('DOMContentLoaded', () => {
             const content = noteMatch[1];
             let noteDateStr = noteMatch[2].trim();
 
-            // Handle relative keywords from AI
+            // Handle "today" or "now" keywords from AI
             if (noteDateStr.toLowerCase() === 'today' || noteDateStr.toLowerCase() === 'now') {
                 noteDateStr = new Date().toDateString();
-            } else if (noteDateStr.toLowerCase() === 'tomorrow') {
-                const tomorrow = new Date();
-                tomorrow.setDate(tomorrow.getDate() + 1);
-                noteDateStr = tomorrow.toDateString();
             } else {
                 // Normalize any other date string provided by AI
                 const parsedDate = new Date(noteDateStr);
@@ -1071,7 +818,6 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             addDateNote(content, noteDateStr);
-            renderSessions(); // Refresh UI
 
             // Refresh UI if the panel is open
             if (typeof renderWeeklyCalendar === 'function') renderWeeklyCalendar();
@@ -1113,13 +859,8 @@ document.addEventListener('DOMContentLoaded', () => {
         // Feature Icons
         const lowerText = cleanText.toLowerCase();
         const features = [];
-        if (alarmMatch) features.push({ name: 'alarm', icon: '⏰' });
-        if (timerMatch) features.push({ name: 'timer', icon: '⏱️' });
-        if (noteMatch) features.push({ name: 'note', icon: '📝' });
-
         if (lowerText.includes('weather') || lowerText.includes('°c')) features.push({ name: 'weather', icon: '☀️' });
         if (lowerText.includes('searching') || lowerText.includes('found') || lowerText.includes('news')) features.push({ name: 'news', icon: '📰' });
-        if (lowerText.includes('youtube') || lowerText.includes('video')) features.push({ name: 'youtube', icon: '🎥' });
 
         features.forEach(f => {
             const iconDiv = document.createElement('div');
@@ -1175,70 +916,28 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // Load History
-    async function loadChatHistory(sessionId = currentSessionId) {
+    async function loadChatHistory() {
         try {
-            const response = await fetch(`/api/chat/history?session_id=${sessionId}`);
+            const response = await fetch('/api/chat/history');
             const data = await response.json();
-
-            const logoArea = document.querySelector('.logo-area');
-            const mainContent = document.querySelector('.main-content');
-            const chatContainer = document.getElementById('chatContainer');
-
             if (data && data.length > 0) {
+                const logoArea = document.querySelector('.logo-area');
+                const mainContent = document.querySelector('.main-content');
+                const chatContainer = document.getElementById('chatContainer');
+
                 if (logoArea) logoArea.style.display = 'none';
                 if (mainContent) mainContent.classList.add('chat-active');
                 if (chatContainer) {
                     chatContainer.classList.add('active');
                     data.forEach(msg => {
-                        // For historical messages, avoid full re-rendering of effects
-                        const bubble = document.createElement('div');
-                        bubble.className = `message-bubble ${msg.role === 'assistant' ? 'ai' : 'user'}`;
-
-                        // Render file if exists
-                        if (msg.file_path) {
-                            const fileContent = document.createElement('div');
-                            fileContent.className = 'message-file-attachment';
-                            if (msg.file_type && msg.file_type.startsWith('image/')) {
-                                fileContent.innerHTML = `<img src="${msg.file_path}" alt="Attached Photo" style="max-width: 100%; border-radius: 12px; margin-bottom: 8px; cursor: pointer;" onclick="window.open('${msg.file_path}', '_blank')">`;
-                            } else {
-                                const fileName = msg.file_path.split('_').slice(1).join('_');
-                                fileContent.innerHTML = `
-                                    <a href="${msg.file_path}" target="_blank" style="display: flex; align-items: center; gap: 10px; padding: 10px; background: rgba(255,255,255,0.05); border-radius: 8px; text-decoration: none; color: inherit;">
-                                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path><polyline points="13 2 13 9 20 9"></polyline></svg>
-                                        <span style="font-size: 13px;">${fileName || 'Attached File'}</span>
-                                    </a>
-                                `;
-                            }
-                            bubble.appendChild(fileContent);
-                        }
-
-                        const textContent = document.createElement('div');
-                        if (msg.role === 'user') {
-                            textContent.innerHTML = formatMessageText(msg.content);
-                        } else {
-                            // Strip tags for history view to avoid double-processing
-                            const clean = msg.content.replace(/\[ALARM:.*?\]/g, '').replace(/\[TIMER:.*?\]/g, '').replace(/\[NOTE:.*?\]/g, '');
-                            textContent.innerHTML = formatMessageText(clean);
-                        }
-                        bubble.appendChild(textContent);
-
-                        chatContainer.appendChild(bubble);
+                        addMessage(msg.content, msg.role === 'assistant' ? 'ai' : 'user');
                         currentChatHistory.push({ role: msg.role, content: msg.content });
                     });
                     chatContainer.scrollTop = chatContainer.scrollHeight;
                 }
-            } else {
-                // If empty session, ensure logo area is visible
-                if (logoArea) {
-                    logoArea.style.display = 'flex';
-                    logoArea.style.opacity = '1';
-                }
-                if (mainContent) mainContent.classList.remove('chat-active');
-                if (chatContainer) chatContainer.classList.remove('active');
             }
         } catch (e) { console.error("History load error:", e); }
     }
 
     loadChatHistory();
-    renderSessions();
 });

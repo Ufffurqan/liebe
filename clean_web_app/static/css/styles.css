@@ -346,28 +346,6 @@ svg {
     color: var(--text-primary);
 }
 
-.attach-btn.has-file {
-    color: var(--accent-color);
-    position: relative;
-}
-
-.attach-btn.has-file::after {
-    content: "1";
-    position: absolute;
-    top: -2px;
-    right: -2px;
-    background: var(--accent-color);
-    color: white;
-    font-size: 8px;
-    width: 12px;
-    height: 12px;
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border: 1px solid var(--surface-color);
-}
-
 .send-btn {
     background-color: #3b3d40;
     /* Disabled state initially */
@@ -443,27 +421,6 @@ svg {
     background-color: var(--surface-color);
     color: var(--text-primary);
     align-self: flex-start;
-}
-
-.message-file-attachment {
-    margin-bottom: 8px;
-    max-width: 100%;
-}
-
-.message-file-attachment img {
-    max-width: 100%;
-    max-height: 300px;
-    border-radius: 12px;
-    display: block;
-    object-fit: contain;
-}
-
-.message-file-attachment a {
-    transition: background 0.2s;
-}
-
-.message-file-attachment a:hover {
-    background-color: rgba(255, 255, 255, 0.1) !important;
 }
 
 /* Notes Panel */
@@ -1137,66 +1094,4 @@ svg {
     50% {
         opacity: 1;
     }
-}
-
-/* Code Blocks */
-.code-block-container {
-    background-color: #0d0d12;
-    border-radius: 12px;
-    margin: 12px 0;
-    overflow: hidden;
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
-}
-
-.code-header {
-    background-color: rgba(255, 255, 255, 0.03);
-    padding: 8px 16px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-}
-
-.code-lang {
-    font-size: 11px;
-    color: var(--text-secondary);
-    text-transform: uppercase;
-    font-weight: 700;
-    letter-spacing: 0.05em;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-}
-
-.code-copy-btn {
-    background: transparent;
-    border: none;
-    color: var(--text-secondary);
-    cursor: pointer;
-    font-size: 12px;
-    padding: 4px 8px;
-    border-radius: 4px;
-    transition: all 0.2s;
-    display: flex;
-    align-items: center;
-    gap: 4px;
-}
-
-.code-copy-btn:hover {
-    color: var(--text-primary);
-    background: rgba(255, 255, 255, 0.05);
-}
-
-.code-content {
-    padding: 16px;
-    overflow-x: auto;
-    font-size: 14px;
-    line-height: 1.6;
-    color: #e6edf3;
-    white-space: pre;
-}
-
-.message-bubble.user .code-block-container {
-    background-color: rgba(0, 0, 0, 0.2);
 }

@@ -2,6 +2,7 @@ import os
 import re
 import asyncio
 import tempfile
+import json
 from datetime import datetime
 from flask import Flask, render_template, request, jsonify, send_file, Response
 from flask_cors import CORS
@@ -20,6 +21,29 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db.init_app(app)
 
 with app.app_context():
+    # Attempt to add session_id column if it doesn't exist (SQLite legacy migration)
+    try:
+        from sqlalchemy import text
+        # Step 1: Add session_id if missing
+        try:
+            db.session.execute(text('ALTER TABLE chat_message ADD COLUMN session_id VARCHAR(50)'))
+            db.session.commit()
+        except: pass
+        
+        # Step 2: Ensure session_ids are not NULL
+        db.session.execute(text('UPDATE chat_message SET session_id = "default" WHERE session_id IS NULL'))
+        db.session.commit()
+    except Exception as e:
+        print(f"Migration Error Phase 1: {e}")
+        
+    try:
+        # Step 3: Add file columns
+        db.session.execute(text('ALTER TABLE chat_message ADD COLUMN file_path VARCHAR(255)'))
+    except: pass
+    try:
+        db.session.execute(text('ALTER TABLE chat_message ADD COLUMN file_type VARCHAR(50)'))
+    except: pass
+    db.session.commit()
     db.create_all()
 
 CORS(app) # Enable CORS for all routes
@@ -32,6 +56,7 @@ def home():
 def chat():
     data = request.json
     user_message = data.get('message', '')
+    session_id = data.get('session_id', 'default')
     
     if not user_message:
         return jsonify({'response': "Please say something."})
@@ -39,35 +64,86 @@ def chat():
     search_enabled = data.get('search_enabled', False)
     deep_thinking_enabled = data.get('deep_thinking_enabled', False)
     chat_history = data.get('history', [])
-    user_msg = ChatMessage(role='user', content=user_message)
-    db.session.add(user_msg)
-    db.session.commit()
 
     def generate():
-        full_reply = ""
-        for update_str in orchestrator.chat_stream(
-            user_message, 
-            history=chat_history,
-            force_search=search_enabled, 
-            force_deep_thinking=deep_thinking_enabled
-        ):
-            update = json.loads(update_str)
-            if update.get('status') == 'done':
-                full_reply = update.get('full_text', '')
-            yield f"data: {update_str}\n\n"
-        
-        # Save AI Response
-        if full_reply:
-            ai_msg = ChatMessage(role='assistant', content=full_reply)
-            db.session.add(ai_msg)
-            db.session.commit()
+        with app.app_context():
+            full_reply = ""
+            try:
+                user_msg = ChatMessage(
+                    role='user', 
+                    content=user_message, 
+                    session_id=session_id,
+                    file_path=data.get('file_path'),
+                    file_type=data.get('file_type')
+                )
+                db.session.add(user_msg)
+                db.session.commit()
+            except Exception as e: print(f"DB Error: {e}")
+
+            for update_str in orchestrator.chat_stream(
+                user_message, 
+                history=chat_history,
+                force_search=search_enabled, 
+                force_deep_thinking=deep_thinking_enabled
+            ):
+                update = json.loads(update_str)
+                if update.get('status') == 'done':
+                    full_reply = update.get('full_text', '')
+                yield f"data: {update_str}\n\n"
+            
+            if full_reply:
+                try:
+                    ai_msg = ChatMessage(role='assistant', content=full_reply, session_id=session_id)
+                    db.session.add(ai_msg)
+                    db.session.commit()
+                except Exception as e: print(f"DB Error: {e}")
 
     return Response(generate(), mimetype='text/event-stream')
 
 @app.route('/api/chat/history', methods=['GET'])
 def get_chat_history():
-    messages = ChatMessage.query.order_by(ChatMessage.timestamp.asc()).all()
+    session_id = request.args.get('session_id', 'default')
+    messages = ChatMessage.query.filter_by(session_id=session_id).order_by(ChatMessage.timestamp.asc()).all()
     return jsonify([m.to_dict() for m in messages])
+
+UPLOAD_FOLDER = 'static/uploads'
+if not os.path.exists(UPLOAD_FOLDER):
+    os.makedirs(UPLOAD_FOLDER)
+
+@app.route('/api/upload', methods=['POST'])
+def upload_file():
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file part'}), 400
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'error': 'No selected file'}), 400
+    
+    filename = f"{datetime.now().timestamp()}_{file.filename}"
+    file_path = os.path.join(UPLOAD_FOLDER, filename)
+    file.save(file_path)
+    
+    file_type = file.content_type
+    return jsonify({
+        'file_path': f"/static/uploads/{filename}",
+        'file_type': file_type
+    })
+
+@app.route('/api/chat/sessions', methods=['GET'])
+def get_sessions():
+    # Group sessions and find last message for each
+    from sqlalchemy import func
+    subquery = db.session.query(
+        ChatMessage.session_id,
+        func.max(ChatMessage.timestamp).label('max_ts')
+    ).group_by(ChatMessage.session_id).subquery()
+    
+    # Get the last "user" message for each session to use as title
+    sessions = db.session.query(ChatMessage).join(
+        subquery,
+        (ChatMessage.session_id == subquery.c.session_id) & (ChatMessage.timestamp == subquery.c.max_ts)
+    ).order_by(ChatMessage.timestamp.desc()).all()
+    
+    return jsonify([s.to_dict() for s in sessions])
 
 @app.route('/api/chat/history', methods=['DELETE'])
 def clear_chat_history():
@@ -258,5 +334,18 @@ def delete_alarm_db(alarm_id):
         return jsonify({"success": True})
     return jsonify({"error": "Not found"}), 404
 
+@app.route('/api/alarms/<int:alarm_id>', methods=['PATCH'])
+def update_alarm_db(alarm_id):
+    alarm = Alarm.query.get(alarm_id)
+    if not alarm:
+        return jsonify({"error": "Not found"}), 404
+    
+    data = request.json
+    if 'prepared' in data:
+        alarm.prepared = data['prepared']
+    
+    db.session.commit()
+    return jsonify(alarm.to_dict())
+
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(host='0.0.0.0', port=5000, debug=True)
