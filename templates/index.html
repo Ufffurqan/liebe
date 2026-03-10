@@ -14,6 +14,24 @@
 </head>
 
 <body>
+    <!-- Authentication Overlay -->
+    <div id="authOverlay" class="auth-overlay">
+        <div class="auth-card">
+            <div class="auth-logo">🧿</div>
+            <div class="auth-input-group">
+                <input type="password" id="adminPassword" class="auth-input" placeholder="Enter password" autofocus>
+                <div id="authError" class="auth-error"></div>
+            </div>
+            <button id="loginBtn" class="auth-btn">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+                    stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="5" y1="12" x2="19" y2="12"></line>
+                    <polyline points="12 5 19 12 12 19"></polyline>
+                </svg>
+            </button>
+        </div>
+    </div>
+
     <div class="app-container">
         <!-- Sidebar -->
         <aside class="sidebar" id="sidebar">

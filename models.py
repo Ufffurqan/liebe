@@ -54,3 +54,20 @@ class ChatMessage(db.Model):
             'file_type': self.file_type,
             'timestamp': self.timestamp.isoformat()
         }
+class FailedAttempt(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    ip_address = db.Column(db.String(50), unique=True, nullable=False)
+    attempts = db.Column(db.Integer, default=0)
+    locked_until = db.Column(db.DateTime, nullable=True)
+
+    def is_locked(self):
+        if self.locked_until and self.locked_until > datetime.utcnow():
+            return True
+        return False
+
+    def to_dict(self):
+        return {
+            'ip_address': self.ip_address,
+            'attempts': self.attempts,
+            'locked_until': self.locked_until.isoformat() if self.locked_until else None
+        }

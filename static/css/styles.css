@@ -972,6 +972,10 @@ svg {
     color: #ffffff;
 }
 
+.service-logo.openclaw {
+    color: #4caf50;
+}
+
 /* Tool Colors (for non-emoji fallback if needed, but keeping for structure) */
 .feature-icon.weather {
     color: #ffce54;
@@ -983,6 +987,10 @@ svg {
 
 .feature-icon.youtube {
     color: #ff0000;
+}
+
+.feature-icon.kali {
+    color: #9c27b0;
 }
 
 @keyframes fadeInLogo {
@@ -1199,4 +1207,91 @@ svg {
 
 .message-bubble.user .code-block-container {
     background-color: rgba(0, 0, 0, 0.2);
+}
+
+/* Login Overlay */
+.auth-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    background-color: var(--bg-color);
+    z-index: 100000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: opacity 0.5s ease, visibility 0.5s ease;
+}
+
+.auth-card {
+    background-color: var(--surface-color);
+    padding: 40px;
+    border-radius: var(--border-radius-lg);
+    border: 1px solid var(--glass-border);
+    width: 90%;
+    max-width: 400px;
+    text-align: center;
+    box-shadow: 0 20px 80px rgba(0, 0, 0, 0.5);
+    animation: fadeIn 0.5s ease-out;
+}
+
+.auth-logo {
+    font-size: 64px;
+    margin-bottom: 30px;
+}
+
+.auth-input-group {
+    margin-bottom: 25px;
+    text-align: left;
+}
+
+.auth-input {
+    width: 100%;
+    background-color: var(--bg-color);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--border-radius-md);
+    padding: 15px;
+    color: var(--text-primary);
+    font-size: 16px;
+    outline: none;
+    transition: border-color 0.3s;
+}
+
+.auth-input:focus {
+    border-color: var(--accent-color);
+}
+
+.auth-error {
+    color: #ff6b6b;
+    font-size: 14px;
+    margin-top: 10px;
+    min-height: 20px;
+}
+
+.auth-btn {
+    width: 100%;
+    background-color: var(--accent-color);
+    color: white;
+    border: none;
+    height: 50px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--border-radius-md);
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s;
+    margin-top: 10px;
+}
+
+.auth-btn:hover {
+    background-color: var(--accent-hover);
+}
+
+.auth-hidden {
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
 }

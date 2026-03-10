@@ -28,6 +28,7 @@ You've created a **full-stack, multi-platform AI assistant** with:
 - Real-time streaming support
 - External API integrations
 - CORS enabled for mobile access
+- **Kali Linux Security Integration** (OpenClaw)
 
 ---
 
@@ -133,6 +134,7 @@ c:\liebe\
 - Chat history & sessions
 - Real-time synchronization
 - Multi-model AI (Gemini, Groq, Ollama)
+- Kali Linux Security Backend (OpenClaw)
 - Dark theme UI
 - Responsive design
 

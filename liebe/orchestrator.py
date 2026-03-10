@@ -34,6 +34,12 @@ class LiebeOrchestrator:
         self.model_ollama_id = os.getenv("MODEL_OLLAMA", "llama3")
         self.model_r1_id = "deepseek-r1-distill-llama-70b" 
 
+        # OpenClaw Settings
+        self.openclaw_ip = os.getenv("OPENCLAW_IP")
+        self.openclaw_token = os.getenv("OPENCLAW_TOKEN")
+        self.openclaw_port = os.getenv("OPENCLAW_PORT", "9876")
+        self.openclaw_url = f"http://{self.openclaw_ip}:{self.openclaw_port}" if self.openclaw_ip else None
+
         # Gemini
         try:
             if self.gemini_key:
@@ -124,6 +130,8 @@ class LiebeOrchestrator:
         weather_keywords = ["weather", "temperature", "forecast", "climate"]
         video_keywords = ["tutorial", "learn", "how to", "course video", "suggest youtube", "watch video"]
         
+        security_keywords = ["nmap", "scan", "vulnerability", "hack", "penetration", "exploit", "kali", "security tools", "ports"]
+        
         info = {
             "needs_search": any(k in msg for k in search_keywords) and not is_basic,
             "is_news_search": any(k in msg for k in news_keywords),
@@ -131,6 +139,7 @@ class LiebeOrchestrator:
             "is_video": any(k in msg for k in video_keywords),
             "is_alarm": any(k in msg for k in ["alarm", "wake me up", "timer"]),
             "is_note": any(k in msg for k in ["remind", "save", "note", "task", "remember", "write", "assignment", "deadline", "todo", "project", "meeting", "appointment", "submit"]),
+            "is_security": any(k in msg for k in security_keywords),
             "is_basic": is_basic,
             "is_greeting": is_greeting,
             "selected_service": "gemini" # Default
@@ -138,7 +147,9 @@ class LiebeOrchestrator:
 
         # Stricter search override (only if not basic conversation)
         # Route logic
-        if "local" in msg or "ollama" in msg:
+        if info["is_security"]:
+            info["selected_service"] = "openclaw"
+        elif "local" in msg or "ollama" in msg:
             info["selected_service"] = "ollama"
         elif any(k in msg for k in ["think", "reason", "math", "logic", "complex", "why"]):
             info["selected_service"] = "groq_r1"
@@ -146,6 +157,25 @@ class LiebeOrchestrator:
             info["selected_service"] = "groq"
             
         return info
+
+    def _call_openclaw(self, prompt):
+        if not self.openclaw_url or not self.openclaw_token:
+            return "### ❌ OpenClaw Connection Error\nOpenClaw details are not configured in your `.env` file."
+            
+        try:
+            # OpenClaw ACP endpoint for prompt execution
+            headers = {"Authorization": f"Bearer {self.openclaw_token}", "Content-Type": "application/json"}
+            payload = {"prompt": prompt}
+            
+            response = requests.post(f"{self.openclaw_url}/api/acp/v1/execute", json=payload, headers=headers, timeout=30)
+            
+            if response.status_code == 200:
+                data = response.json()
+                return data.get('result', "No result returned from Kali.")
+            else:
+                return f"### ❌ Kali OpenClaw Error ({response.status_code})\n{response.text}"
+        except Exception as e:
+            return f"### ❌ Connection Failed\nCould not reach Kali Linux at {self.openclaw_ip}. Make sure the VM is running and OpenClaw is active."
 
     def chat_stream(self, user_message, history=None, force_search=False, force_deep_thinking=False):
         yield json.dumps({"status": "progress", "message": "🧿 Analyzing intent..."})
@@ -161,6 +191,12 @@ class LiebeOrchestrator:
         if intent["needs_search"]:
             yield json.dumps({"status": "progress", "message": "🌐 Searching..."})
             contexts.append(self.search_web(user_message))
+
+        if intent["selected_service"] == "openclaw":
+            yield json.dumps({"status": "progress", "message": "🛡️ Querying Kali OpenClaw..."})
+            res = self._call_openclaw(user_message)
+            yield json.dumps({"status": "done", "full_text": res, "service": "openclaw"})
+            return
 
         if intent["is_video"]:
             yield json.dumps({"status": "progress", "message": "🎥 Searching YouTube..."})

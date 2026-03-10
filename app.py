@@ -4,18 +4,35 @@ import asyncio
 import tempfile
 import json
 from datetime import datetime
-from flask import Flask, render_template, request, jsonify, send_file, Response
+from flask import Flask, render_template, request, jsonify, send_file, Response, session
+from datetime import datetime, timedelta
+from werkzeug.security import generate_password_hash, check_password_hash
 from flask_cors import CORS
 from dotenv import load_dotenv
 from liebe.orchestrator import orchestrator
-from models import db, DailyNote, Alarm, ChatMessage
+from models import db, DailyNote, Alarm, ChatMessage, FailedAttempt
 import edge_tts
 
 # Load environment variables
 load_dotenv()
 
 app = Flask(__name__)
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///liebe.db'
+app.secret_key = os.getenv('SESSION_SECRET', 'liebe-ultra-secure-fallback-key-999')
+# Use a hashed password from environment or fallback to a hashed default
+DEFAULT_HASH = generate_password_hash('liebe123')
+app.config['USER_PASSWORD_HASH'] = os.getenv('APP_PASSWORD_HASH', DEFAULT_HASH)
+
+# Secure Session Settings
+app.config.update(
+    SESSION_COOKIE_SECURE=True,
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE='Lax',
+    PERMANENT_SESSION_LIFETIME=timedelta(days=7)
+)
+app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', 'sqlite:///liebe.db')
+if app.config['SQLALCHEMY_DATABASE_URI'].startswith("postgres://"):
+    app.config['SQLALCHEMY_DATABASE_URI'] = app.config['SQLALCHEMY_DATABASE_URI'].replace("postgres://", "postgresql://", 1)
+
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db.init_app(app)
@@ -48,11 +65,71 @@ with app.app_context():
 
 CORS(app) # Enable CORS for all routes
 
+def require_auth(f):
+    from functools import wraps
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not session.get('authenticated'):
+            return jsonify({'error': 'Unauthorized'}), 401
+        return f(*args, **kwargs)
+    return decorated_function
+
+@app.route('/api/login', methods=['POST'])
+def login():
+    data = request.json
+    password = data.get('password')
+    
+    # Secure IP detection (safer split)
+    xff = request.headers.get('X-Forwarded-For')
+    ip = xff.split(',')[0].strip() if xff else request.remote_addr
+
+    print(f"[DEBUG] Login attempt from {ip} for password length: {len(password) if password else 0}")
+
+    # Check lock
+    record = FailedAttempt.query.filter_by(ip_address=ip).first()
+    if record and record.is_locked():
+        remaining = (record.locked_until - datetime.utcnow()).total_seconds()
+        hours = int(remaining // 3600)
+        minutes = int((remaining % 3600) // 60)
+        return jsonify({'error': f'Too many failed attempts. Locked for {hours}h {minutes}m.'}), 403
+
+    current_hash = app.config.get('USER_PASSWORD_HASH')
+    
+    if check_password_hash(current_hash, password):
+        print(f"[DEBUG] Login SUCCESS for {ip}")
+        if record:
+            db.session.delete(record)
+            db.session.commit()
+        session['authenticated'] = True
+        session.permanent = True
+        return jsonify({'status': 'success'})
+    else:
+        print(f"[DEBUG] Login FAILED for {ip}")
+        if not record:
+            record = FailedAttempt(ip_address=ip, attempts=1)
+            db.session.add(record)
+        else:
+            record.attempts += 1
+            if record.attempts >= 2:
+                record.locked_until = datetime.utcnow() + timedelta(hours=24)
+        
+        db.session.commit()
+        
+        remaining_tries = 2 - (record.attempts if record else 0)
+        if record.attempts >= 2:
+            return jsonify({'error': 'Too many failed attempts. Locked for 24 hours.'}), 403
+        return jsonify({'error': f'Incorrect password. {remaining_tries} attempts remaining.'}), 401
+
+@app.route('/api/auth_status', methods=['GET'])
+def auth_status():
+    return jsonify({'authenticated': session.get('authenticated', False)})
+
 @app.route('/')
 def home():
     return render_template('index.html')
 
 @app.route('/api/chat', methods=['POST'])
+@require_auth
 def chat():
     data = request.json
     user_message = data.get('message', '')
@@ -101,6 +178,7 @@ def chat():
     return Response(generate(), mimetype='text/event-stream')
 
 @app.route('/api/chat/history', methods=['GET'])
+@require_auth
 def get_chat_history():
     session_id = request.args.get('session_id', 'default')
     messages = ChatMessage.query.filter_by(session_id=session_id).order_by(ChatMessage.timestamp.asc()).all()
@@ -111,6 +189,7 @@ if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
 
 @app.route('/api/upload', methods=['POST'])
+@require_auth
 def upload_file():
     if 'file' not in request.files:
         return jsonify({'error': 'No file part'}), 400
@@ -129,6 +208,7 @@ def upload_file():
     })
 
 @app.route('/api/chat/sessions', methods=['GET'])
+@require_auth
 def get_sessions():
     # Group sessions and find last message for each
     from sqlalchemy import func
@@ -146,12 +226,14 @@ def get_sessions():
     return jsonify([s.to_dict() for s in sessions])
 
 @app.route('/api/chat/history', methods=['DELETE'])
+@require_auth
 def clear_chat_history():
     ChatMessage.query.delete()
     db.session.commit()
     return jsonify({"status": "success"})
 
 @app.route('/api/weather', methods=['GET'])
+@require_auth
 def get_top_weather():
     city = request.args.get('city', 'Mumbai')
     # Use the existing orchestrator method
@@ -178,6 +260,7 @@ def get_top_weather():
     return jsonify({'error': 'Failed to parse', 'raw': result})
 
 @app.route('/api/morning_briefing', methods=['POST'])
+@require_auth
 def get_morning_briefing():
     data = request.json
     city = data.get('city', 'Mumbai')
@@ -233,6 +316,7 @@ def get_morning_briefing():
     })
 
 @app.route('/api/tts')
+@require_auth
 def tts():
     text = request.args.get('text', '')
     if not text:
@@ -268,6 +352,7 @@ def tts():
     return Response(generate(), mimetype="audio/mpeg")
 
 @app.route('/api/youtube/suggest', methods=['GET'])
+@require_auth
 def suggest_youtube_videos():
     query = request.args.get('query', 'trending')
     result = orchestrator.get_youtube_recommendations(query)
@@ -277,6 +362,7 @@ def suggest_youtube_videos():
 # --- DATABASE API ENDPOINTS ---
 
 @app.route('/api/notes', methods=['GET'])
+@require_auth
 def get_notes():
     date_str = request.args.get('date')
     if date_str:
@@ -286,6 +372,7 @@ def get_notes():
     return jsonify([n.to_dict() for n in notes])
 
 @app.route('/api/notes', methods=['POST'])
+@require_auth
 def add_note():
     data = request.json
     new_note = DailyNote(
@@ -299,6 +386,7 @@ def add_note():
     return jsonify(new_note.to_dict()), 201
 
 @app.route('/api/notes/<int:note_id>', methods=['DELETE'])
+@require_auth
 def delete_note(note_id):
     note = DailyNote.query.get(note_id)
     if note:
@@ -308,11 +396,13 @@ def delete_note(note_id):
     return jsonify({"error": "Not found"}), 404
 
 @app.route('/api/alarms', methods=['GET'])
+@require_auth
 def get_alarms():
     alarms = Alarm.query.all()
     return jsonify([a.to_dict() for a in alarms])
 
 @app.route('/api/alarms', methods=['POST'])
+@require_auth
 def add_alarm_db():
     data = request.json
     new_alarm = Alarm(
@@ -326,6 +416,7 @@ def add_alarm_db():
     return jsonify(new_alarm.to_dict()), 201
 
 @app.route('/api/alarms/<int:alarm_id>', methods=['DELETE'])
+@require_auth
 def delete_alarm_db(alarm_id):
     alarm = Alarm.query.get(alarm_id)
     if alarm:
@@ -335,6 +426,7 @@ def delete_alarm_db(alarm_id):
     return jsonify({"error": "Not found"}), 404
 
 @app.route('/api/alarms/<int:alarm_id>', methods=['PATCH'])
+@require_auth
 def update_alarm_db(alarm_id):
     alarm = Alarm.query.get(alarm_id)
     if not alarm:

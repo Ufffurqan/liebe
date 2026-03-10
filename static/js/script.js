@@ -3,6 +3,69 @@ document.addEventListener('DOMContentLoaded', () => {
     const sendBtn = document.querySelector('.send-btn');
     const container = document.querySelector('.input-container');
 
+    // --- AUTHENTICATION LOGIC ---
+    const authOverlay = document.getElementById('authOverlay');
+    const passwordInput = document.getElementById('adminPassword');
+    const loginBtn = document.getElementById('loginBtn');
+    const authError = document.getElementById('authError');
+
+    async function checkAuthStatus() {
+        try {
+            const res = await fetch('/api/auth_status');
+            const data = await res.json();
+            if (data.authenticated) {
+                authOverlay.classList.add('auth-hidden');
+            } else {
+                authOverlay.classList.remove('auth-hidden');
+            }
+        } catch (e) {
+            // If API returns 401, we know we're not authenticated
+            authOverlay.classList.remove('auth-hidden');
+        }
+    }
+
+    async function handleLogin() {
+        const password = passwordInput.value;
+        if (!password) return;
+
+        loginBtn.disabled = true;
+        loginBtn.style.opacity = '0.5';
+        authError.innerText = '';
+
+        try {
+            const res = await fetch('/api/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ password })
+            });
+            const data = await res.json();
+
+            if (res.ok) {
+                authOverlay.classList.add('auth-hidden');
+                // Reload data once authenticated
+                if (typeof syncData === 'function') syncData();
+                if (typeof renderSessions === 'function') renderSessions();
+            } else {
+                authError.innerText = data.error || 'Login failed';
+                passwordInput.value = '';
+                passwordInput.focus();
+            }
+        } catch (e) {
+            authError.innerText = 'Connection error';
+        } finally {
+            loginBtn.disabled = false;
+            loginBtn.style.opacity = '1';
+        }
+    }
+
+    if (loginBtn) {
+        loginBtn.addEventListener('click', handleLogin);
+        passwordInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') handleLogin();
+        });
+        checkAuthStatus();
+    }
+
     // Clock Logic
     function updateClock() {
         const now = new Date();
@@ -1096,6 +1159,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (service === 'gemini') serviceIcon = '✨';
             else if (service === 'groq') serviceIcon = '⚡';
             else if (service === 'ollama') serviceIcon = '🏠';
+            else if (service === 'openclaw') serviceIcon = '🛡️';
 
             const logoDiv = document.createElement('div');
             logoDiv.className = `service-logo ${service}`;
@@ -1120,6 +1184,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (lowerText.includes('weather') || lowerText.includes('°c')) features.push({ name: 'weather', icon: '☀️' });
         if (lowerText.includes('searching') || lowerText.includes('found') || lowerText.includes('news')) features.push({ name: 'news', icon: '📰' });
         if (lowerText.includes('youtube') || lowerText.includes('video')) features.push({ name: 'youtube', icon: '🎥' });
+        if (service === 'openclaw' || lowerText.includes('kali') || lowerText.includes('nmap')) features.push({ name: 'kali', icon: '🐉' });
 
         features.forEach(f => {
             const iconDiv = document.createElement('div');
