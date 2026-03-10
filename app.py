@@ -20,7 +20,15 @@ load_dotenv()
 import tempfile
 BASE_TMP_PATH = "/tmp" if os.name != 'nt' else tempfile.gettempdir()
 
-app = Flask(__name__, instance_path=os.path.abspath(BASE_TMP_PATH))
+# Explicitly define folders for consistent behavior across environments
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+app = Flask(
+    __name__,
+    static_folder=os.path.join(BASE_DIR, 'static'),
+    template_folder=os.path.join(BASE_DIR, 'templates'),
+    instance_path=os.path.abspath(BASE_TMP_PATH)
+)
 app.secret_key = os.getenv('SESSION_SECRET', 'liebe-ultra-secure-fallback-key-999')
 
 # Use a hashed password from environment or fallback to hashed default
@@ -204,9 +212,14 @@ def upload_file():
     
     file_type = file.content_type
     return jsonify({
-        'file_path': f"/static/uploads/{filename}",
+        'file_path': f"/api/uploads/{filename}",
         'file_type': file_type
     })
+
+# Helper route to serve uploads from /tmp (or system temp)
+@app.route('/api/uploads/<filename>')
+def serve_upload(filename):
+    return send_file(os.path.join(UPLOAD_FOLDER, filename))
 
 @app.route('/api/chat/sessions', methods=['GET'])
 @require_auth

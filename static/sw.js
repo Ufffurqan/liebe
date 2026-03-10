@@ -1,7 +1,7 @@
 const CACHE_NAME = 'liebe-v1';
 const ASSETS = [
     '/',
-    '/static/css/styles.css',
+    '/static/css/style.css',
     '/static/js/script.js',
     '/static/icons/icon-512.png'
 ];
