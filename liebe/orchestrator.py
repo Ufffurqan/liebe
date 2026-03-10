@@ -6,7 +6,7 @@ import re
 import requests
 from ddgs import DDGS
 from dotenv import load_dotenv
-import google.generativeai as genai
+from google import genai
 from groq import Groq
 import ollama
 from liebe.youtube_manager import youtube_manager
@@ -40,11 +40,10 @@ class LiebeOrchestrator:
         self.openclaw_port = os.getenv("OPENCLAW_PORT", "9876")
         self.openclaw_url = f"http://{self.openclaw_ip}:{self.openclaw_port}" if self.openclaw_ip else None
 
-        # Gemini
+        # Gemini (Using new google.genai Client)
         try:
             if self.gemini_key:
-                genai.configure(api_key=self.gemini_key)
-                self.gemini_client = genai.GenerativeModel(self.model_gemini_id)
+                self.gemini_client = genai.Client(api_key=self.gemini_key)
         except Exception: self.gemini_client = None
 
         # Groq
@@ -225,9 +224,8 @@ class LiebeOrchestrator:
 
             # Fast Stream (Gemini)
             if service == "gemini" and self.gemini_client:
-                response = self.gemini_client.generate_content(full_prompt, stream=True)
                 full_text = ""
-                for chunk in response:
+                for chunk in self.gemini_client.models.generate_content_stream(model=self.model_gemini_id, contents=full_prompt):
                     if chunk.text:
                         full_text += chunk.text
                         yield json.dumps({"status": "chunk", "text": chunk.text, "service": "gemini"})
@@ -260,7 +258,7 @@ class LiebeOrchestrator:
         for m in messages[:-1]:
             full_prompt += f"{m['role'].upper()}: {m['content']}\n"
         full_prompt += f"USER: {messages[-1]['content']}"
-        response = self.gemini_client.generate_content(full_prompt)
+        response = self.gemini_client.models.generate_content(model=self.model_gemini_id, contents=full_prompt)
         return response.text
 
     def _call_groq(self, model, system_prompt, messages, max_tokens=None):
@@ -302,7 +300,7 @@ class LiebeOrchestrator:
         prompt += f"USER: {user_message}"
 
         try:
-            response = self.gemini_client.generate_content(prompt)
+            response = self.gemini_client.models.generate_content(model=self.model_gemini_id, contents=prompt)
             return response.text, "gemini"
         except Exception as e:
             return f"Error: {str(e)}", "none"

@@ -16,9 +16,14 @@ import edge_tts
 # Load environment variables
 load_dotenv()
 
-app = Flask(__name__)
+# Vercel-safe absolute path handling
+import tempfile
+BASE_TMP_PATH = "/tmp" if os.name != 'nt' else tempfile.gettempdir()
+
+app = Flask(__name__, instance_path=os.path.abspath(BASE_TMP_PATH))
 app.secret_key = os.getenv('SESSION_SECRET', 'liebe-ultra-secure-fallback-key-999')
-# Use a hashed password from environment or fallback to a hashed default
+
+# Use a hashed password from environment or fallback to hashed default
 DEFAULT_HASH = generate_password_hash('liebe123')
 app.config['USER_PASSWORD_HASH'] = os.getenv('APP_PASSWORD_HASH', DEFAULT_HASH)
 
@@ -29,39 +34,36 @@ app.config.update(
     SESSION_COOKIE_SAMESITE='Lax',
     PERMANENT_SESSION_LIFETIME=timedelta(days=7)
 )
-app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', 'sqlite:///liebe.db')
-if app.config['SQLALCHEMY_DATABASE_URI'].startswith("postgres://"):
-    app.config['SQLALCHEMY_DATABASE_URI'] = app.config['SQLALCHEMY_DATABASE_URI'].replace("postgres://", "postgresql://", 1)
 
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+# --- DATABASE CONFIGURATION (SUPABASE / POSTGRESQL) ---
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+if not DATABASE_URL:
+    print("WARNING: DATABASE_URL not set. Application may fail on Vercel.")
+    DATABASE_URL = "sqlite:////tmp/liebe.db" 
+
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+pg8000://", 1)
+elif DATABASE_URL.startswith("postgresql://"):
+    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+pg8000://", 1)
+
+app.config["SQLALCHEMY_DATABASE_URI"] = DATABASE_URL
+app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+
+# Engine Options for Serverless Environments
+app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
+    "pool_pre_ping": True,
+    "pool_recycle": 300
+}
 
 db.init_app(app)
 
 with app.app_context():
-    # Attempt to add session_id column if it doesn't exist (SQLite legacy migration)
     try:
-        from sqlalchemy import text
-        # Step 1: Add session_id if missing
-        try:
-            db.session.execute(text('ALTER TABLE chat_message ADD COLUMN session_id VARCHAR(50)'))
-            db.session.commit()
-        except: pass
-        
-        # Step 2: Ensure session_ids are not NULL
-        db.session.execute(text('UPDATE chat_message SET session_id = "default" WHERE session_id IS NULL'))
-        db.session.commit()
+        db.create_all()
+        print("Database connected and initialized successfully.")
     except Exception as e:
-        print(f"Migration Error Phase 1: {e}")
-        
-    try:
-        # Step 3: Add file columns
-        db.session.execute(text('ALTER TABLE chat_message ADD COLUMN file_path VARCHAR(255)'))
-    except: pass
-    try:
-        db.session.execute(text('ALTER TABLE chat_message ADD COLUMN file_type VARCHAR(50)'))
-    except: pass
-    db.session.commit()
-    db.create_all()
+        print(f"❌ Database Error: {str(e)}")
 
 CORS(app) # Enable CORS for all routes
 
@@ -184,9 +186,8 @@ def get_chat_history():
     messages = ChatMessage.query.filter_by(session_id=session_id).order_by(ChatMessage.timestamp.asc()).all()
     return jsonify([m.to_dict() for m in messages])
 
-UPLOAD_FOLDER = 'static/uploads'
-if not os.path.exists(UPLOAD_FOLDER):
-    os.makedirs(UPLOAD_FOLDER)
+UPLOAD_FOLDER = os.path.join(os.path.abspath(BASE_TMP_PATH), "uploads")
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 @app.route('/api/upload', methods=['POST'])
 @require_auth
